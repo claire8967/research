@@ -26,11 +26,13 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Import('*')
-
+env.Append(LIBS=['gsl','gslcblas','m']) # for gsl integration
 SimObject('SimpleObject.py')
 SimObject('HelloObject.py')
 SimObject('SimpleMemobj.py')
 SimObject('SimpleCache.py')
+# SimObject('scrubbing_table.py')
+# Source('scrubbing_object.cc')
 
 Source('simple_object.cc')
 Source('hello_object.cc')

@@ -125,6 +125,7 @@ X86Abort::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 InvalidOpcode::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    //std::cout<< " test 2 " << std::endl;
     if (FullSystem) {
         X86Fault::invoke(tc, inst);
     } else {
@@ -136,6 +137,7 @@ InvalidOpcode::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 PageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    //std::cout<< " test 1 " << std::endl;
     if (FullSystem) {
         // Invalidate any matching TLB entries before handling the page fault.
         tc->getMMUPtr()->demapPage(addr, 0);
@@ -182,6 +184,7 @@ PageFault::describe() const
 void
 InitInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    //std::cout<< " test 3 " << std::endl;
     DPRINTF(Faults, "Init interrupt.\n");
     // The otherwise unmodified integer registers should be set to 0.
     for (int index = 0; index < NUM_INTREGS; index++) {

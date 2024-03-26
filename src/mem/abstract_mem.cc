@@ -39,7 +39,7 @@
  */
 
 #include "mem/abstract_mem.hh"
-
+#include "mem/abstractmem_method.hh"
 #include <vector>
 
 #include "arch/locked_mem.hh"
@@ -55,15 +55,31 @@
 #include "base/types.hh"
 #include <unordered_map>
 #include <string>
-std::ofstream ofsss("memoryaccess.txt",std::ios::app);
-std::ofstream ofs_page_map("page_map.txt",std::ios::app);
-int display_count = 0;
-int page_limit_count = 524288; // 2GB/4KB
-std::unordered_map < int, vector<int> > page_map; // <requestorID,pageID>
-int swap_in_count = 0;
-int swap_out_count = 0;
-string process_id;
 
+int page_in_memory_count = 0;
+int page_in_swap_space_count = 0;
+int page_limit_count = 25;
+int swap_space_limit_count = 524288;
+int global_swap_in_count = 0;
+int global_swap_out_count = 0;
+uint64_t global_access_time = 0;
+
+int global_write_counter = 0;
+int global_read_counter = 0;
+int process_id;
+int page_id;
+bool page_type;
+bool temp_approximate;
+int zone_id;
+//std:: ofstream ofsss("memoryaccess.txt",std::ios::app);
+//std:: ofstream ofs_page_map("page_map.txt",std::ios::app);
+std::unordered_map<int, std::unordered_map<int,std::vector<PageTable>>> page_map; //process_id -> page_id -> PageTable
+std::unordered_map<int, std::unordered_map<bool, std::unordered_map<int,std::vector<PageTable>>>> swap_space;
+std::unordered_map<int, std::unordered_map<bool, std::unordered_map<int,std::set<int> > > > scrubbing_state_table;
+
+PageTable::PageTable( int process_id, int page_id, bool valid, bool modified, int swap_in_counter, int swap_out_counter, int access_time, bool approximate ) :
+    process_id(process_id),page_id(page_id),valid(true),modified(false),read_counter(0),write_counter(0),access_time(global_access_time),approximate(temp_approximate) {
+}
 
 
 AbstractMemory::AbstractMemory(const Params &p) :
@@ -126,9 +142,12 @@ AbstractMemory::setBackingStore(uint8_t* pmem_addr)
 
 AbstractMemory::MemStats::MemStats(AbstractMemory &_mem)
     : Stats::Group(&_mem), mem(_mem),
-    ADD_STAT(bytesRead, UNIT_BYTE, "Number of bytes read from this memory"),
+    ADD_STAT(swap_in_test, UNIT_COUNT, 
+             "Number of bytes read from this memory global swap counter"),
+    ADD_STAT(swap_out_test, UNIT_COUNT, 
+             "Number of bytes read from this memory global swap counter"),
     ADD_STAT(bytesInstRead, UNIT_BYTE,
-             "Number of instructions bytes read from this memory"),
+             "Number of instructions bytes read from this mmmmemory"),
     ADD_STAT(bytesWritten, UNIT_BYTE,
              "Number of bytes written to this memory"),
     ADD_STAT(numReads, UNIT_COUNT,
@@ -354,18 +373,135 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
     return allowStore;
 }
 //my method
-string get_processId ( RequestorID id ) {
-    if( id == 5 | id == 6 ) {
+int
+get_processId ( uint16_t id ) {
+
+    if( id == 5 || id == 6 ) {
+        temp_approximate = false;
         return 1;
-    }
-    if( id == 9 | id == 10 ) {
+    } else if( id == 9 || id == 10 ) {
+        temp_approximate = true;
         return 2;
     }
+
+    return -1;
 }
-void print_page_map ( int process_id, unordered_map<int,vector<int>> page_map ) {
-    std::cout << "print process" << process_id << " page_map";
-    for( int i = 0; i < page_map[process_id].size(); i++ ) {
-        ofs_page_map << page_map[process_id][i] << "\n"; 
+
+void swap_in ( int process_id, int page_id ) {
+    //ofsss << "swap in process id : " << process_id << " page_id : " << page_id << "\n";
+    //ofsss << "global_swap_in_count" << "\n";
+    global_swap_in_count++;
+    swap_space[process_id][true][page_id][0].valid = false;
+    
+    if ( swap_space[process_id][true][page_id][0].modified == 1 ) {
+        swap_space[process_id][true][page_id][0].write_counter++;
+        global_read_counter++;   
+    } else {
+        swap_space[process_id][true][page_id][0].read_counter++;
+        global_write_counter++;
+    }
+    page_map[process_id][page_id].push_back(swap_space[process_id][true][page_id][0]);
+    page_map[process_id][page_id].erase(page_map[process_id][page_id].begin());
+    page_map[process_id][page_id][0].access_time = curTick();
+    swap_space[process_id][true].erase(page_id);
+    swap_space[process_id][false][page_id].push_back(page_map[process_id][page_id][0]);
+
+    for( int i = 1; i <= 3; i++ ) {
+        if( scrubbing_state_table[i][true][process_id].find(page_id) != scrubbing_state_table[i][true][process_id].end() ) {
+            scrubbing_state_table[i][false][process_id].erase(page_id);
+            scrubbing_state_table[i][false][process_id].insert(page_id);   
+        }
+    }
+
+}
+
+void swap_out ( int process_id, int page_id ) { // 要考慮 swap_space 已滿的情況
+    //ofsss << "swap out process id : " << process_id << " page_id : " << page_id << "\n";
+    //ofsss << "global_swap_out_count" << "\n";
+    global_swap_out_count++;
+    page_in_swap_space_count++;
+    page_in_memory_count--;
+
+    if( page_in_swap_space_count >= swap_space_limit_count ) {
+        std::cout << "select_swap_space_victim_page" << std::endl;
+        //select_swap_space_victim_page();
+    }
+    //ofsss <<"21" << std::endl;
+    page_map[process_id][page_id][0].valid = true;
+    //ofsss <<"22" << std::endl;
+    
+    swap_space[process_id][true][page_id].push_back(page_map[process_id][page_id][0]);
+    swap_space[process_id][true][page_id].erase(swap_space[process_id][true][page_id].begin());
+    //ofsss <<"23" << std::endl;
+    int state = set_page_state( process_id, page_id );
+    change_page_state( process_id, page_id, state );
+
+    if ( swap_space[process_id][false].find(page_id) != swap_space[process_id][false].end() ) {
+        swap_space[process_id][false].erase(page_id);
+    } 
+    page_map[process_id].erase(page_id);
+    
+}
+// //zone -> valid -> process_id -> set()
+// void print_scrubbing_state_table () {
+// }
+
+std::pair<int,int> select_victim_page () {
+    int value = INT32_MAX;
+    int victim_process_id = 0;
+    int victim_page_id = 0;
+    int temp_value = 0;
+
+    for (const auto& process_pair : page_map ) {
+        const auto& temp_map = process_pair.second;
+        for (const auto& page_pair : temp_map) {
+            temp_value = page_pair.second[0].access_time;
+            if( temp_value < value ) {
+                value = temp_value;
+                victim_process_id = process_pair.first;
+                victim_page_id = page_pair.first;
+            }
+        }
+    }
+    //ofsss << "select_victim_page process id : " << victim_process_id << " page_id : " << victim_page_id << "\n";
+    return {victim_process_id,victim_page_id};
+}
+
+int set_page_state ( int process_id, int page_id ) {
+    int read_value = swap_space[process_id][true][page_id][0].read_counter;
+    int write_value = swap_space[process_id][true][page_id][0].write_counter;
+    int return_value = 0;
+    //int threshold = global
+    if ( write_value > global_write_counter ) { // write hot page
+        return_value = 1;
+    } else if ( read_value > global_read_counter ) { // read hot page
+        return_value = 2;
+    } else { 
+        return_value = 3; // read cold
+    }
+    //ofsss << "set_page_state for process_id : " << process_id << " page_id : " << page_id << " state : " << return_value << "\n";
+    return return_value;
+} 
+void change_page_state (int process_id, int page_id, int state ) {
+    for( int i = 1; i <= 3; i++ ) {
+        if( scrubbing_state_table[i][false][process_id].find(page_id) != scrubbing_state_table[i][false][process_id].end() ) {
+            scrubbing_state_table[i][false][process_id].erase(page_id); 
+        }
+    }
+    if( state == 1 && swap_space[process_id][true][page_id][0].approximate == 1 ) { // write hot & approximate data
+        scrubbing_state_table[2][true][process_id].insert(page_id);
+    } else if ( state == 1 && swap_space[process_id][true][page_id][0].approximate == 0 ) { // write hot & precise data
+        scrubbing_state_table[2][true][process_id].insert(page_id);
+    } else if ( state == 2 && swap_space[process_id][true][page_id][0].approximate == 1 ) { // read hot &  approximate data
+        scrubbing_state_table[1][true][process_id].insert(page_id);
+    } else if ( state == 2 && swap_space[process_id][true][page_id][0].approximate == 0 ) { // read hot &  precise data
+        scrubbing_state_table[3][true][process_id].insert(page_id);
+    } else if ( state == 3 && swap_space[process_id][true][page_id][0].approximate == 1 ) { // read cold & approximate data
+        scrubbing_state_table[2][true][process_id].insert(page_id);
+    } else if ( state == 3 && swap_space[process_id][true][page_id][0].approximate == 0 ) { // read cold & precise data
+        scrubbing_state_table[2][true][process_id].insert(page_id);
+    } else {
+        std::cout << "change page state error " << std::endl;
     }
 }
 
@@ -373,6 +509,7 @@ void print_page_map ( int process_id, unordered_map<int,vector<int>> page_map ) 
 static inline void
 tracePacket(System *sys, const char *label, PacketPtr pkt)
 {
+    //std::cout<< "sys tick is : " << curTick() << std::endl;
     int size = pkt->getSize();
     if (size == 1 || size == 2 || size == 4 || size == 8) {
         ByteOrder byte_order = sys->getGuestByteOrder();
@@ -384,35 +521,70 @@ tracePacket(System *sys, const char *label, PacketPtr pkt)
         
         DPRINTF(MemoryAccess,"data is %#x \n",pkt->getUintX(byte_order));
         
-        long int page_id = pkt->getAddr() / 4096;
-        ofsss << "requestorId is: " << pkt->req->requestorId() << " page_id is : " << page_id << "\n";
-        ofsss << "addr is : " << pkt->getAddr() << "\n";
-
-        // change requestorId to processId
+        //ini
+        page_id = pkt->getAddr() / 4096;
         process_id = get_processId( pkt->requestorId() );
+        bool page_is_write = !pkt->isRead(); // 1:write, 0:read
+        global_access_time++;
+        //ofsss << "access in process id : " << process_id << " page_id : " << page_id << std::endl;
+        
 
-        if ( display_count > page_limit_count ) { // entering swap space method
-            ofsss << "display_count is : " << display_count << "\n";
-            ofsss << "data is : " << pkt->getUintX(byte_order) << "\n";
-            ofsss << "type is : " << pkt->isRead() << "\n";
-            ofsss << "addr is : " << pkt->getAddr() << "\n";
-            ofsss << "requestorId is: " << pkt->req->requestorId() << "\n";
-            ofsss << "size is: " << size << "\n";
-        } else { // use memory space directly
-            if( page_map.find( process_id) != 0 ) {
-                page_map[process_id].push_back( page_id );
+        //PageTable temp_page(process_id,page_id,true,page_is_write,0,0,global_access_time,temp_approximate);
+    
+        
+        //allocate
+        
+        if ( page_map.find(process_id) != page_map.end() ) { // process in page_map 
+            if ( page_map[process_id].find(page_id) != page_map[process_id].end() ) { // 在 Mem valid (case1)
+                page_map[process_id][page_id][0].access_time = curTick();
+                page_map[process_id][page_id][0].modified = page_is_write;
+            
+            } else { // memory full -> do swap_out()
+
+                if( page_in_memory_count >= page_limit_count ) { 
+                    int victim_process_id, victim_page_id;
+                    std::tie( victim_process_id, victim_page_id ) = select_victim_page();
+                    //ofsss << "swap out " << std::endl;
+                    swap_out( victim_process_id, victim_page_id );
+                    page_in_memory_count--;
+                }
+
+                if ( swap_space[process_id][true].find(page_id) != swap_space[process_id][true].end() ) { // page in swap_space valid -> do swap_in ()
+                    //ofsss << "swap in " << std::endl;
+                    swap_in( process_id, page_id );
+                    page_in_memory_count++;                    
+
+                } else {
+                    PageTable temp_page(process_id,page_id,true,page_is_write,0,0,curTick(),temp_approximate);
+                    page_map[process_id][page_id].push_back(temp_page);
+                    page_in_memory_count++;
+                }
+            
+            } 
+
+        } else { // process not in page_map
+
+            if ( page_in_memory_count >= page_limit_count ) {
+                int victim_process_id, victim_page_id;
+                std::tie( victim_process_id, victim_page_id ) = select_victim_page();
+                swap_out( victim_process_id, victim_page_id );
             }
+
+            if ( swap_space[process_id][true].find(page_id) != swap_space[process_id][true].end() ) {
+                swap_in( process_id, page_id );   
+                //ofsss << "swap in " << std::endl;
+                page_in_memory_count++;
+            } else {
+                PageTable temp_page(process_id,page_id,true,page_is_write,0,0,curTick(),temp_approximate);
+                page_map[process_id][page_id].push_back(temp_page);
+                page_in_memory_count++;
+            }
+
         }
-        display_count++;
-        
-        
-        //debug code
-        if( display_count == 100 ) {
-            print_page_map(1,page_map);
-        }
-        
         return;
     }
+
+
     DPRINTF(MemoryAccess, "%s from %s of size %i on address %#x %c\n",
             label, sys->getRequestorName(pkt->req->requestorId()),
             size, pkt->getAddr(), pkt->req->isUncacheable() ? 'U' : 'C');
@@ -428,6 +600,8 @@ tracePacket(System *sys, const char *label, PacketPtr pkt)
 void
 AbstractMemory::access(PacketPtr pkt)
 {
+    global_swap_in_count = 0;
+    global_swap_out_count = 0;
     //std::cout << "access " << std::endl;
     //ByteOrder byte_order = "LITTLE_ENDIAN";
     //System *sys;
@@ -491,6 +665,8 @@ AbstractMemory::access(PacketPtr pkt)
 
             assert(!pkt->req->isInstFetch());
             TRACE_PACKET("Read/Write");
+            stats.swap_in_test += global_swap_in_count;
+            stats.swap_out_test += global_swap_out_count;
             stats.numOther[pkt->req->requestorId()]++;
         }
     } else if (pkt->isRead()) {
@@ -505,6 +681,8 @@ AbstractMemory::access(PacketPtr pkt)
             pkt->setData(host_addr);
         }
         TRACE_PACKET(pkt->req->isInstFetch() ? "IFetch" : "Read");
+        stats.swap_in_test += global_swap_in_count;
+        stats.swap_out_test += global_swap_out_count;
         stats.numReads[pkt->req->requestorId()]++;
         stats.bytesRead[pkt->req->requestorId()] += pkt->getSize();
         if (pkt->req->isInstFetch())
@@ -524,16 +702,18 @@ AbstractMemory::access(PacketPtr pkt)
             }
             assert(!pkt->req->isInstFetch());
             TRACE_PACKET("Write");
+            stats.swap_in_test += global_swap_in_count;
+            stats.swap_out_test += global_swap_out_count;
             stats.numWrites[pkt->req->requestorId()]++;
             stats.bytesWritten[pkt->req->requestorId()] += pkt->getSize();
         }
     } else {
         panic("Unexpected packet %s", pkt->print());
     }
-
     if (pkt->needsResponse()) {
         pkt->makeResponse();
     }
+    
 }
 
 void

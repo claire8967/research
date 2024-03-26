@@ -34,6 +34,7 @@
 #include "learning_gem5/part2/goodbye_object.hh"
 #include "params/HelloObject.hh"
 #include "sim/sim_object.hh"
+#include <iostream>
 
 class HelloObject : public SimObject
 {
@@ -47,7 +48,7 @@ class HelloObject : public SimObject
     EventFunctionWrapper event;
 
     /// Pointer to the corresponding GoodbyeObject. Set via Python
-    GoodbyeObject* goodbye;
+    //GoodbyeObject* goodbye;
 
     /// The name of this object in the Python config file
     const std::string myName;
@@ -68,5 +69,11 @@ class HelloObject : public SimObject
      */
     void startup();
 };
+
+// double gaussian_pdf(double x, double mean, double stddev);
+// double integrate_gaussian(double mean, double stddev, double lower_bound, double upper_bound);
+// double error_count ( int t, int t0, int level, int error_tolerant );
+// double error_page ( int t, int t0, int error_tolerant );
+
 
 #endif // __LEARNING_GEM5_HELLO_OBJECT_HH__
