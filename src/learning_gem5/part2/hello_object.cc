@@ -238,10 +238,18 @@ HelloObject::processEvent()
             }
         }
     }
-
+    // aging process
     if( current_time % 10 == 0 ) {
         std::cout << " Aging !!! " << std::endl;
-
+        for ( int i = 0; i < page_map.size(); i++ ) {
+            temp_process_id = page_map[i][0];
+            temp_page_id = page_map[i][1];
+            page_table[temp_process_id][temp_page_id][0].read_counter = page_table[temp_process_id][temp_page_id][0].read_counter / 2;
+            page_table[temp_process_id][temp_page_id][0].write_counter = page_table[temp_process_id][temp_page_id][0].write_counter / 2;
+        }
+        global_read_counter = global_read_counter / 2;
+        global_write_counter = global_write_counter / 2;
+    }
 
     }
     //std::cout << "total count is : " << total_count << std::endl;
