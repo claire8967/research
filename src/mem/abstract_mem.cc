@@ -74,7 +74,7 @@ bool page_type;
 bool temp_approximate;
 int zone_id;
 bool swap_space_id_set_ini_flag = false;
-int energy = 0;
+int rw_flag = 0;
 
 int baseline = 1;
 int RC = 0;
@@ -83,9 +83,19 @@ int RH = 0;
 
 int light_write_count = 0;
 int heavy_write_count = 0;
+int rw_flag_count = 0;
+
 double light_write_energy = 0;
 double heavy_write_energy = 0;
+double light_write_latency = 0;
+double heavy_write_latency = 0;
+
 int space_overhead = 0;
+int space_overhead_for_short_ECC = 0;
+int space_overhead_for_medium_ECC = 0;
+int space_overhead_for_long_ECC = 0;
+int space_overhead_for_heavy_ECC = 0;
+
 
 //std:: ofstream ofsss("memoryaccess.txt",std::ios::app);
 //std:: ofstream ofs_page_map("page_map.txt",std::ios::app);
@@ -410,10 +420,10 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
 int get_processId ( uint16_t id ) {
 
     if( id == 5 || id == 6 ) {
-        temp_approximate = true;
+        temp_approximate = false;
         return 1;
     } else if( id == 9 || id == 10 ) {
-        temp_approximate = false;
+        temp_approximate = true;
         return 2;
     }
 
@@ -744,6 +754,7 @@ int swap_out ( int victim_process_id, int victim_page_id ) { // 要考慮 swap_s
     //std::cout << "swap_out" << std::endl;
     //ofsss << "swap out process id : " << process_id << " page_id : " << page_id << "\n";
     //ofsss << "global_swap_out_count" << "\n";
+    rw_flag = 0;
     page_table[victim_process_id][victim_page_id][0].valid = true;
     page_table[victim_process_id][victim_page_id][0].access_time = curTick();
     page_table[victim_process_id][victim_page_id][0].line_access_time.assign ( 64, curTick() );
@@ -768,7 +779,7 @@ int swap_out ( int victim_process_id, int victim_page_id ) { // 要考慮 swap_s
     } else { 
         swap_space[page_in_swap_space_id] = {1,victim_process_id,victim_page_id};
         if ( page_table[victim_process_id][victim_page_id][0].modified == 0 ) {
-            //energy = 1;
+            rw_flag = 1;
         } else {
             page_table[victim_process_id][victim_page_id][0].modified = 0;
         }
@@ -786,20 +797,26 @@ int swap_out ( int victim_process_id, int victim_page_id ) { // 要考慮 swap_s
 
 void baseline_zone( int victim_process_id, int victim_page_id ) {
     bool appro = page_table[victim_process_id][victim_page_id][0].approximate ;
+    if( rw_flag == 0 ) {
+        rw_flag_count++;
+    }
+
     if ( appro ) { //light write
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2 * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
         //RH++;
-        energy = 0;
+        rw_flag = 0;
     } else { // heavy write
-        if ( energy == 0 ) {
-            heavy_write_energy += 789708.8 * 64 * pow(10,-12);
+        if ( rw_flag == 0 ) {
+            heavy_write_energy += 1542.4 * 64 * pow(10,-12);
+            heavy_write_latency += 3000 * 64 * pow(10,-9);
             heavy_write_count++;
         }
         //WH++;
-        energy = 0;
+        rw_flag = 0;
     }
 
     for( int i = 1; i <= 3; i++ ) {
@@ -812,9 +829,10 @@ void baseline_zone( int victim_process_id, int victim_page_id ) {
 
     if( appro ) {
         scrubbing_state_table[1][true][victim_process_id].insert(victim_page_id); // light zone
-        space_overhead += 1;
+        space_overhead_for_medium_ECC += 1;
     } else if ( appro != 1 ) {
         scrubbing_state_table[3][true][victim_process_id].insert(victim_page_id); // heavy zone
+        space_overhead_for_heavy_ECC += 1;
     } else {
         //std::cout << "change page state error " << std::endl;
     }
@@ -884,6 +902,9 @@ int set_page_state ( int process_id, int page_id ) {
 } 
 void change_page_state (int process_id, int page_id, int state ) {
     //std::cout << "change_page_state" << std::endl;
+    if( rw_flag == 0 )
+        rw_flag_count++;
+
     for( int i = 1; i <= 3; i++ ) {
         if( scrubbing_state_table[i][false][process_id].find(page_id) != scrubbing_state_table[i][false][process_id].end() ) {
             scrubbing_state_table[i][false][process_id].erase(page_id); 
@@ -893,56 +914,63 @@ void change_page_state (int process_id, int page_id, int state ) {
     if( state == 1 && page_table[process_id][page_id][0].approximate == 1 ) { // write hot & approximate data
         scrubbing_state_table[2][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 1 " << std::endl;
-        space_overhead += 1;
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        space_overhead_for_short_ECC += 1;
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2  * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else if ( state == 1 && page_table[process_id][page_id][0].approximate == 0 ) { // write hot & precise data
         scrubbing_state_table[2][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 2 " << std::endl;
-        space_overhead += 1;
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        space_overhead_for_short_ECC += 1;
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2  * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else if ( state == 2 && page_table[process_id][page_id][0].approximate == 1 ) { // read hot &  approximate data
         scrubbing_state_table[1][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 3 " << std::endl;
-        space_overhead += 1;
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        space_overhead_for_short_ECC += 1;
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2  * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else if ( state == 2 && page_table[process_id][page_id][0].approximate == 0 ) { // read hot &  precise data
+        space_overhead_for_heavy_ECC += 1;
         scrubbing_state_table[3][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 4 " << std::endl;
-        if ( energy == 0 ) {
-            heavy_write_energy += 789708.8 * 64 * pow(10,-12);
+        if ( rw_flag == 0 ) {
+            heavy_write_energy += 1542.4 * 64 * pow(10,-12);
+            heavy_write_latency += 3000 * 64 * pow(10,-9);
             heavy_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else if ( state == 3 && page_table[process_id][page_id][0].approximate == 1 ) { // read cold & approximate data
         scrubbing_state_table[2][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 5 " << std::endl;
-        space_overhead += 8;
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        space_overhead_for_medium_ECC += 1;
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2 * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else if ( state == 3 && page_table[process_id][page_id][0].approximate == 0 ) { // read cold & precise data
         scrubbing_state_table[2][true][process_id].insert(page_id);
         //std::cout << "scrubbing_state_table insert 6 " << std::endl;
-        space_overhead += 16;
-        if ( energy == 0 ) {
-            light_write_energy += 489062.4 * 64 * pow(10,-12);
+        space_overhead_for_long_ECC += 1;
+        if ( rw_flag == 0 ) {
+            light_write_energy += 955.2 * 64 * pow(10,-12);
+            light_write_latency += 1000 * 64 * pow(10,-9);
             light_write_count++;
         }
-        energy = 0;
+        rw_flag = 0;
     } else {
         std::cout << "change page state error " << std::endl;
     }
