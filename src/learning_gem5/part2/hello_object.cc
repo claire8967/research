@@ -52,6 +52,7 @@ int rewrite_count = 0;
 int total_count = 0;
 double rewrite_energy = 0;
 double scanning_energy = 0;
+double scanning_latency = 0;
 
 double gaussian_pdf(double x, double mean, double stddev) {
     return (1.0 / (stddev * sqrt(2.0 * M_PI)) )* exp(-0.5 * pow((x - mean) / stddev, 2));
@@ -152,7 +153,13 @@ HelloObject::processEvent()
     std::cout << "WH count is : " << WH << std::endl;
     std::cout << "light write count is " << light_write_count << std::endl;
     std::cout << "heavy write count is " << heavy_write_count << std::endl;
-    std::cout << "space overhead is " << space_overhead << std::endl;
+    std::cout << "rw_flag count is " << rw_flag_count << std::endl;
+    
+    std::cout << "space_overhead_for_short_ECC count is " << space_overhead_for_short_ECC << std::endl;
+    std::cout << "space_overhead_for_medium_ECC count is " << space_overhead_for_medium_ECC << std::endl;
+    std::cout << "space_overhead_for_long_ECC count is " << space_overhead_for_long_ECC << std::endl;
+    std::cout << "space_overhead_for_heavy_ECC count is " << space_overhead_for_heavy_ECC << std::endl;
+    std::cout << "space overhead is " << 10 * space_overhead_for_heavy_ECC + 19 * space_overhead_for_short_ECC + 37 * space_overhead_for_medium_ECC + 73 *space_overhead_for_long_ECC << std::endl;
 
     if ( current_time % 4 == 0 ) {
         std::cout << " short zone " << current_time << std::endl;
@@ -172,7 +179,8 @@ HelloObject::processEvent()
                 temp_swap_space_id = page_in_swap_space ( it->first, f);
                 
                 for ( int iteration = 0; iteration < 64; iteration++ ) {
-                    scanning_energy += 5120 * pow(10,-12);
+                    scanning_energy += 32 * pow(10,-12);
+                    scanning_latency += 600 * pow(10,-9);
                     accesstime = page_table[it->first][f][0].line_access_time[iteration] / pow(10,12);
                     if ( accesstime <= 1 ) {
                         accesstime = 1;
@@ -214,7 +222,8 @@ HelloObject::processEvent()
                 //std::cout << "error 53 " << temp_swap_space_id << std::endl;
                 for ( int iteration = 0; iteration < 64; iteration++ ) {
                     //std::cout << "error 54 " << std::endl;
-                    scanning_energy += 5120 * pow(10,-12);
+                    scanning_energy += 32 * pow(10,-12);
+                    scanning_latency += 600 * pow(10,-9); // 450ns read latency + 150ns scan latency
                     //std::cout << "error 55 " << std::endl;
                     accesstime = page_table[it->first][f][0].line_access_time[iteration] / pow(10,12);
                     //std::cout << "error 56 " << std::endl;
@@ -229,6 +238,7 @@ HelloObject::processEvent()
                         scrubbing_desired_times_table[temp_swap_space_id][1]++;
                         rewrite_count++;
                         page_table[it->first][f][0].line_access_time[iteration]= curTick();
+                        light_write_latency += 1000 * pow(10,-9);
                     } else {
                         total_count++;
                     }
@@ -241,6 +251,8 @@ HelloObject::processEvent()
     // aging process
     if( current_time % 10 == 0 ) {
         std::cout << " Aging !!! " << std::endl;
+        int temp_process_id = -1;
+        int temp_page_id = -1;
         for ( int i = 0; i < page_map.size(); i++ ) {
             temp_process_id = page_map[i][0];
             temp_page_id = page_map[i][1];
@@ -251,16 +263,19 @@ HelloObject::processEvent()
         global_write_counter = global_write_counter / 2;
     }
 
-    }
+    
     //std::cout << "total count is : " << total_count << std::endl;
     //std::cout << "rewrite count is : " << rewrite_count << std::endl;
-    rewrite_energy += 489062.4 * rewrite_count * pow(10,-12);
+    rewrite_energy += 945 * rewrite_count * pow(10,-12);
     std::cout << "rewrite energy consumption is : " << rewrite_energy << std::endl;
     std::cout << "light write energy consumption is : " << light_write_energy << std::endl;
     std::cout << "heavy write energy consumption is : " << heavy_write_energy << std::endl;
-    std::cout << "scanning energy consumption is : " << scanning_energy << std::endl;
+    std::cout << "scanning energy consumption is : " << scanning_energy << std::endl; 
     std::cout << "total energy consumption is : " << rewrite_energy + light_write_energy + heavy_write_energy + scanning_energy << std::endl;
-
+    std::cout << "light write latency is : " << light_write_latency << std::endl;
+    std::cout << "heavy write latency is : " << heavy_write_latency << std::endl;
+    std::cout << "scanning latency is : " << scanning_latency << std::endl;
+    std::cout << "total latency is : " << light_write_latency + heavy_write_latency + scanning_latency << std::endl;
     rewrite_count = 0;
     schedule(event, curTick() + latency);
     
