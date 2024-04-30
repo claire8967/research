@@ -64,7 +64,7 @@ int global_swap_in_count = 0;
 int global_swap_out_count = 0;
 int scrubbing_desired_times_table_flag = 0;
 uint64_t global_access_time = 0;
-
+int aging_count = 0;
 
 double global_write_counter = 0;
 double global_read_counter = 0;
@@ -76,7 +76,7 @@ int zone_id;
 bool swap_space_id_set_ini_flag = false;
 int rw_flag = 0;
 
-int baseline = 1;
+int baseline = 0;
 int RC = 0;
 int WH = 0;
 int RH = 0;
@@ -87,8 +87,11 @@ int rw_flag_count = 0;
 
 double light_write_energy = 0;
 double heavy_write_energy = 0;
+double read_energy = 0;
+
 double light_write_latency = 0;
 double heavy_write_latency = 0;
+double read_latency = 0;
 
 int space_overhead = 0;
 int space_overhead_for_short_ECC = 0;
@@ -431,11 +434,90 @@ int get_processId ( uint16_t id ) {
 }
 
 
+void aging () {
+    std::cout << " Aging !!! " << std::endl;
+    int temp_process_id = -1;
+    int temp_page_id = -1;
+    std::cout << "1" << std::endl;
+    for ( int i = 0; i < page_map.size(); i++ ) {
+        temp_process_id = page_map[i][0];
+        std::cout << "aging temp_process_id " << temp_process_id << std::endl;
+        temp_page_id = page_map[i][1];
+        std::cout << "aging temp_page_id " << temp_page_id << std::endl;
+        if( temp_page_id != -1 || temp_process_id != -1) {
+            page_table[temp_process_id][temp_page_id][0].read_counter = page_table[temp_process_id][temp_page_id][0].read_counter / 2;
+            page_table[temp_process_id][temp_page_id][0].write_counter = page_table[temp_process_id][temp_page_id][0].write_counter / 2;
+        }
+    }
+    global_read_counter = global_read_counter / 2;
+    global_write_counter = global_write_counter / 2;
+
+    scrubbing_state_table.erase ( scrubbing_state_table.begin(), scrubbing_state_table.end() ); 
+    
+    int tmp_valid;
+    int tmp_process_id;
+    int tmp_page_id;
+    int tmp_approximate;
+    int tmp_read_counter;
+    int tmp_write_counter;
+    int state;
+    std::cout << "2" << std::endl;
+    // scrubbing_state_table : zone_id -> valid/invalid -> process_id -> page_id
+    // swap space : swapspace_id -> {valid,process_id,page_id}
+    
+    for ( int i = 0; i < swap_space.size(); i++ ) {
+        std::cout << "3" << std::endl;
+        tmp_valid = swap_space[i][0];
+        tmp_process_id = swap_space[i][1];
+        tmp_page_id = swap_space[i][2];
+        tmp_approximate = page_table[tmp_process_id][tmp_page_id][0].approximate;        
+        tmp_read_counter = page_table[tmp_process_id][tmp_page_id][0].read_counter;
+        tmp_write_counter = page_table[tmp_process_id][tmp_page_id][0].write_counter;
+        
+        // judge state
+        if ( tmp_write_counter >= (global_write_counter/page_in_swap_space_count) ) { // write hot page
+            state = 1;
+        } else if ( tmp_read_counter >= (global_read_counter/page_in_swap_space_count) ) { // read hot page
+            state = 2;
+        } else { 
+            state = 3; // read cold
+        }
+
+        if( state == 1 && tmp_approximate == 1 ) { // write hot & approximate data
+            scrubbing_state_table[2][tmp_valid][tmp_process_id].insert(tmp_page_id);
+    
+        } else if ( state == 1 && temp_approximate == 0 ) { // write hot & precise data
+            scrubbing_state_table[2][tmp_valid][tmp_process_id].insert(tmp_page_id);
+       
+        } else if ( state == 2 && tmp_approximate == 1 ) { // read hot &  approximate data
+            scrubbing_state_table[1][tmp_valid][tmp_process_id].insert(tmp_page_id);
+    
+        } else if ( state == 2 && tmp_approximate == 0 ) { // read hot &  precise data
+            scrubbing_state_table[3][tmp_valid][tmp_process_id].insert(tmp_page_id);
+    
+        } else if ( state == 3 && temp_approximate == 1 ) { // read cold & approximate data
+            scrubbing_state_table[2][tmp_valid][tmp_process_id].insert(tmp_page_id);
+        
+        } else if ( state == 3 && tmp_approximate == 0 ) { // read cold & precise data
+            scrubbing_state_table[2][tmp_valid][tmp_process_id].insert(tmp_page_id);
+        } else {
+            std::cout << "change page state error " << std::endl;
+        }
+
+    } 
+
+    
+
+}
+
+
 void swap_in ( int process_id, int page_id, bool page_is_write, int swap_space_id ) {
     //ofsss << "swap in process id : " << process_id << " page_id : " << page_id << "\n";
     //ofsss << "global_swap_in_count" << "\n";
     //std::cout << "swap in " << std::endl;
     global_swap_in_count++;
+    read_latency += 1000 * 64 * pow(10,-9);
+    read_energy += 48 * 64 * pow(10,-12);
     
     if ( page_is_write == 1 ) {
         page_table[process_id][page_id][0].write_counter++;
@@ -518,7 +600,12 @@ void add_page_to_memory ( int process_id, int page_id, int page_is_write, int me
             PageTable temp_page(process_id,page_id,true,page_is_write,0,0,curTick(),temp_approximate);
             page_table[process_id][page_id].push_back(temp_page);
             page_table[process_id][page_id][0].approximate = temp_approximate;
-        } 
+        } else {
+            page_table[process_id][page_id][0].access_time = curTick();
+            page_table[process_id][page_id][0].line_access_time.assign ( 64, curTick() );
+            page_table[process_id][page_id][0].approximate = temp_approximate;
+            page_table[process_id][page_id][0].modified = page_is_write;
+        }
     } else {
         PageTable temp_page(process_id,page_id,true,page_is_write,0,0,curTick(),temp_approximate);
         page_table[process_id][page_id].push_back(temp_page);
@@ -587,6 +674,36 @@ int select_swap_space_victim_page () {
         return return_id;
     }
 
+    if( return_id == -1 ) {
+        for ( auto it = scrubbing_state_table[2][true].begin(); it != scrubbing_state_table[2][true].end(); ++it ) {
+            //std::cout << "process_id 2 true" << it->first << std::endl;
+            for ( auto f : scrubbing_state_table[2][true][it->first] ) { // f: pageid, it->first:processid
+                //std::cout << "page_id 2 true " << f << std::endl;
+                temp_swap_space_id = page_in_swap_space( it->first, f );
+                //std::cout << "page_id 2 true temp_swap_id : " << temp_swap_space_id << std::endl;
+
+                if ( scrubbing_desired_times_table[temp_swap_space_id][1] - scrubbing_desired_times_table[temp_swap_space_id][0] < temp_min && (temp_swap_space_id != -1)) {
+                    //std::cout << "bbb" << std::endl;
+                    temp_min = scrubbing_desired_times_table[temp_swap_space_id][1] - scrubbing_desired_times_table[temp_swap_space_id][0];
+                    return_id = temp_swap_space_id;
+                    temp_process_id = it->first;
+                    temp_page_id = f;
+                }
+            }
+        }
+    }
+    //std::cout << "aaa" << std::endl;
+    if( return_id != -1) {
+        // std::cout << "2 true " << std::endl;
+        // std::cout << "temp_swap_space_id is : " << return_id << std::endl;
+        // std::cout << "temp_process_id is : " << temp_process_id << std::endl;
+        // std::cout << "temp_page_id is : " << temp_page_id << std::endl;
+
+        swap_space[return_id] = {-1,-1};
+        scrubbing_state_table[2][true][temp_process_id].erase(temp_page_id);
+        return return_id;
+    }
+
 
     if( return_id == -1 ) {
         for ( auto it = scrubbing_state_table[1][false].begin(); it != scrubbing_state_table[1][false].end(); ++it ) {
@@ -643,35 +760,6 @@ int select_swap_space_victim_page () {
 
         swap_space[return_id] = {-1,-1};
         scrubbing_state_table[3][false][temp_process_id].erase(temp_page_id);
-        return return_id;
-    }
-    if( return_id == -1 ) {
-        for ( auto it = scrubbing_state_table[2][true].begin(); it != scrubbing_state_table[2][true].end(); ++it ) {
-            //std::cout << "process_id 2 true" << it->first << std::endl;
-            for ( auto f : scrubbing_state_table[2][true][it->first] ) { // f: pageid, it->first:processid
-                //std::cout << "page_id 2 true " << f << std::endl;
-                temp_swap_space_id = page_in_swap_space( it->first, f );
-                //std::cout << "page_id 2 true temp_swap_id : " << temp_swap_space_id << std::endl;
-
-                if ( scrubbing_desired_times_table[temp_swap_space_id][1] - scrubbing_desired_times_table[temp_swap_space_id][0] < temp_min && (temp_swap_space_id != -1)) {
-                    //std::cout << "bbb" << std::endl;
-                    temp_min = scrubbing_desired_times_table[temp_swap_space_id][1] - scrubbing_desired_times_table[temp_swap_space_id][0];
-                    return_id = temp_swap_space_id;
-                    temp_process_id = it->first;
-                    temp_page_id = f;
-                }
-            }
-        }
-    }
-    //std::cout << "aaa" << std::endl;
-    if( return_id != -1) {
-        // std::cout << "2 true " << std::endl;
-        // std::cout << "temp_swap_space_id is : " << return_id << std::endl;
-        // std::cout << "temp_process_id is : " << temp_process_id << std::endl;
-        // std::cout << "temp_page_id is : " << temp_page_id << std::endl;
-
-        swap_space[return_id] = {-1,-1};
-        scrubbing_state_table[2][true][temp_process_id].erase(temp_page_id);
         return return_id;
     }
 
@@ -776,9 +864,11 @@ int swap_out ( int victim_process_id, int victim_page_id ) { // 要考慮 swap_s
         //std::cout << "pageid error here " << victim_page_id << std::endl;
         //std::cout << "temp_swap_id error here " << temp_swap_id << std::endl;
         swap_space[temp_swap_id] = {1,victim_process_id,victim_page_id};
-    } else { 
+    } else {
+        //rw_flag_count++;
         swap_space[page_in_swap_space_id] = {1,victim_process_id,victim_page_id};
         if ( page_table[victim_process_id][victim_page_id][0].modified == 0 ) {
+            rw_flag_count++;
             rw_flag = 1;
         } else {
             page_table[victim_process_id][victim_page_id][0].modified = 0;
@@ -797,22 +887,21 @@ int swap_out ( int victim_process_id, int victim_page_id ) { // 要考慮 swap_s
 
 void baseline_zone( int victim_process_id, int victim_page_id ) {
     bool appro = page_table[victim_process_id][victim_page_id][0].approximate ;
-    if( rw_flag == 0 ) {
-        rw_flag_count++;
-    }
 
     if ( appro ) { //light write
+        space_overhead_for_short_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2 * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         //RH++;
         rw_flag = 0;
     } else { // heavy write
+        space_overhead_for_heavy_ECC += 1;
         if ( rw_flag == 0 ) {
             heavy_write_energy += 1542.4 * 64 * pow(10,-12);
-            heavy_write_latency += 3000 * 64 * pow(10,-9);
+            heavy_write_latency += 10000 * 64 * pow(10,-9);
             heavy_write_count++;
         }
         //WH++;
@@ -829,10 +918,8 @@ void baseline_zone( int victim_process_id, int victim_page_id ) {
 
     if( appro ) {
         scrubbing_state_table[1][true][victim_process_id].insert(victim_page_id); // light zone
-        space_overhead_for_medium_ECC += 1;
     } else if ( appro != 1 ) {
         scrubbing_state_table[3][true][victim_process_id].insert(victim_page_id); // heavy zone
-        space_overhead_for_heavy_ECC += 1;
     } else {
         //std::cout << "change page state error " << std::endl;
     }
@@ -902,9 +989,6 @@ int set_page_state ( int process_id, int page_id ) {
 } 
 void change_page_state (int process_id, int page_id, int state ) {
     //std::cout << "change_page_state" << std::endl;
-    if( rw_flag == 0 )
-        rw_flag_count++;
-
     for( int i = 1; i <= 3; i++ ) {
         if( scrubbing_state_table[i][false][process_id].find(page_id) != scrubbing_state_table[i][false][process_id].end() ) {
             scrubbing_state_table[i][false][process_id].erase(page_id); 
@@ -917,7 +1001,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         space_overhead_for_short_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2  * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         rw_flag = 0;
@@ -927,7 +1011,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         space_overhead_for_short_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2  * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         rw_flag = 0;
@@ -937,7 +1021,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         space_overhead_for_short_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2  * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         rw_flag = 0;
@@ -947,7 +1031,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         //std::cout << "scrubbing_state_table insert 4 " << std::endl;
         if ( rw_flag == 0 ) {
             heavy_write_energy += 1542.4 * 64 * pow(10,-12);
-            heavy_write_latency += 3000 * 64 * pow(10,-9);
+            heavy_write_latency += 10000 * 64 * pow(10,-9);
             heavy_write_count++;
         }
         rw_flag = 0;
@@ -957,7 +1041,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         space_overhead_for_medium_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2 * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         rw_flag = 0;
@@ -967,7 +1051,7 @@ void change_page_state (int process_id, int page_id, int state ) {
         space_overhead_for_long_ECC += 1;
         if ( rw_flag == 0 ) {
             light_write_energy += 955.2 * 64 * pow(10,-12);
-            light_write_latency += 1000 * 64 * pow(10,-9);
+            light_write_latency += 3000 * 64 * pow(10,-9);
             light_write_count++;
         }
         rw_flag = 0;
@@ -984,6 +1068,11 @@ tracePacket(System *sys, const char *label, PacketPtr pkt)
         scrubbing_desired_times_table_ini();
         scrubbing_desired_times_table_flag = 1;
     }
+
+    if( aging_count >= 102400 && aging_count % 10240 == 0 ) {
+        aging();
+    }
+    aging_count++;
 
     //std::cout<< "sys tick is : " << curTick() << std::endl;
     int size = pkt->getSize();
@@ -1019,6 +1108,7 @@ tracePacket(System *sys, const char *label, PacketPtr pkt)
             page_table[process_id][page_id][0].access_time = curTick();
             page_table[process_id][page_id][0].line_access_time.assign ( 64, curTick() );
             page_table[process_id][page_id][0].approximate = temp_approximate;
+            page_table[process_id][page_id][0].modified = page_is_write;
 
         } else { //page not in memory
             int memory_id_for_swap_out = -2;

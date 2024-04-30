@@ -172,8 +172,9 @@ class AbstractMemory : public ClockedObject
         const AbstractMemory &mem;
 
         // mystats
-        Stats::Scalar swap_in_test;
-        Stats::Scalar swap_out_test;
+        Stats::Scalar rewrite_energy;
+        Stats::Scalar light_write_energy;
+        Stats::Scalar heavy_write_energy;
 
         /** Number of total bytes read from this memory */
         Stats::Vector bytesRead;

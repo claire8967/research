@@ -22,14 +22,27 @@ extern int global_swap_out_count;
 extern uint64_t global_access_time;
 extern double global_write_counter;
 extern double global_read_counter;
+
+extern double read_energy;
 extern double light_write_energy;
 extern double heavy_write_energy;
+
+extern double light_write_latency;
+extern double heavy_write_latency;
+extern double read_latency;
+
 extern int RC;
 extern int RH;
 extern int WH;
 extern int light_write_count;
 extern int heavy_write_count;
+extern int rw_flag_count;
+
 extern int space_overhead;
+extern int space_overhead_for_short_ECC;
+extern int space_overhead_for_long_ECC;
+extern int space_overhead_for_medium_ECC;
+extern int space_overhead_for_heavy_ECC; 
 
 // for code
 class PageTable {
