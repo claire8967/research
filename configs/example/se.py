@@ -271,6 +271,7 @@ if options.wait_gdb:
         cpu.wait_for_remote_gdb = True
 
 root = Root(full_system = False, system = system)
-root.hello = HelloObject(time_to_wait = '15us', number_of_fires = 10)
+root.hello = HelloObject(time_to_wait = '1s', number_of_fires = 10)
 root.hello.goodbye_object = GoodbyeObject(buffer_size='100B')
+#root.scrubbing_short_zone = HelloObject(time_to_wait = '1s')
 Simulation.run(options, root, system, FutureClass)

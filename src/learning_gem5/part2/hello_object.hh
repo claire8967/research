@@ -36,6 +36,9 @@
 #include "sim/sim_object.hh"
 #include <iostream>
 
+extern uint64_t current_time;
+extern double error_page ( uint64_t t, uint64_t t0, uint64_t error_tolerant );
+
 class HelloObject : public SimObject
 {
   private:
